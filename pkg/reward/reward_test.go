@@ -4,6 +4,7 @@
 package reward
 
 import (
+	"context"
 	"math/big"
 	"testing"
 	"time"
@@ -38,10 +39,10 @@ func TestProfitCalculation(t *testing.T) {
 
 	for _, rewardAmount := range []float64{5e17, 1e18, 2e18, 3e18} {
 		contractCaller := &MockContractCaler{trbRewardAmount: big.NewInt(int64(rewardAmount))}
-		reward := New(logger, aggregator, contractCaller)
+		reward := New(logger, aggregator, contractCaller, nil, nil)
 		reward.SaveGasUsed(slotNum, uint64(gasUsed))
 
-		rewardAct, err := reward.Current(slotNum, big.NewInt(int64(gasCost)))
+		rewardAct, err := reward.Current(context.Background(), slotNum, big.NewInt(int64(gasCost)))
 		testutil.Ok(t, err)
 		profit := rewardAmount*trbPrice - costTotal
 		profitPercent := (profit / costTotal) * 100
@@ -67,4 +68,18 @@ func (*MockContractCaler) GetUintVar(opts *bind.CallOpts, _data [32]byte) (*big.
 
 func (self *MockContractCaler) CurrentReward(opts *bind.CallOpts) (*big.Int, error) {
 	return self.trbRewardAmount, nil
+}
+
+func (self *MockContractCaler) GetNewCurrentVariables(opts *bind.CallOpts) (struct {
+	Challenge  [32]byte
+	RequestIds [5]*big.Int
+	Difficutly *big.Int
+	Tip        *big.Int
+}, error) {
+	return struct {
+		Challenge  [32]byte
+		RequestIds [5]*big.Int
+		Difficutly *big.Int
+		Tip        *big.Int
+	}{}, nil
 }

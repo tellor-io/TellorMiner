@@ -239,7 +239,7 @@ func (self *Submitter) profitPercent() (int64, error) {
 		slot.SetInt64(0)
 	}
 
-	return self.reward.Current(slot, gasPrice)
+	return self.reward.Current(self.ctx, slot, gasPrice))
 }
 
 func (self *Submitter) Submit(newChallengeReplace context.Context, result *mining.Result) {

@@ -4,16 +4,24 @@
 package reward
 
 import (
+	"context"
 	"fmt"
+	"math"
 	"math/big"
+	"strings"
 	"time"
 
+	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
 	"github.com/pkg/errors"
 	"github.com/tellor-io/telliot/pkg/aggregator"
-	"github.com/tellor-io/telliot/pkg/ethereum"
+	"github.com/tellor-io/telliot/pkg/contracts"
+	"github.com/tellor-io/telliot/pkg/contracts/tellor"
+	eth "github.com/tellor-io/telliot/pkg/ethereum"
 )
 
 const ComponentName = "reward"
@@ -21,14 +29,25 @@ const ComponentName = "reward"
 type ContractCaller interface {
 	GetUintVar(opts *bind.CallOpts, _data [32]byte) (*big.Int, error)
 	CurrentReward(opts *bind.CallOpts) (*big.Int, error)
+	GetNewCurrentVariables(opts *bind.CallOpts) (struct {
+		Challenge  [32]byte
+		RequestIds [5]*big.Int
+		Difficutly *big.Int
+		Tip        *big.Int
+	}, error)
 }
 
-func New(logger log.Logger, aggr aggregator.IAggregator, contractCaller ContractCaller) *Reward {
+func New(logger log.Logger, aggr aggregator.IAggregator, contractCaller ContractCaller, client contracts.ETHClient, account *eth.Account) *Reward {
+	// Getting abi.
+	abi, _ := abi.JSON(strings.NewReader(tellor.TellorABI))
 	return &Reward{
 		aggr:           aggr,
 		logger:         log.With(logger, "component", ComponentName),
 		contractCaller: contractCaller,
 		gasUsed:        make(map[int64]*big.Int),
+		client:         client,
+		abi:            abi,
+		account:        account,
 	}
 }
 
@@ -36,12 +55,15 @@ type Reward struct {
 	logger         log.Logger
 	aggr           aggregator.IAggregator
 	contractCaller ContractCaller
+	client         contracts.ETHClient
 	gasUsed        map[int64]*big.Int
+	abi            abi.ABI
+	account        *eth.Account
 }
 
 // Current returns the profit in percents based on the current TRB price.
-func (self *Reward) Current(slot *big.Int, gasPriceEth1e18 *big.Int) (int64, error) {
-	gasUsed, err := self.GasUsed(slot)
+func (self *Reward) Current(ctx context.Context, slot *big.Int, gasPriceEth1e18 *big.Int) (int64, error) {
+	gasUsed, err := self.GasUsed(ctx, slot)
 	if err != nil {
 		return 0, err
 	}
@@ -70,12 +92,84 @@ func (self *Reward) Current(slot *big.Int, gasPriceEth1e18 *big.Int) (int64, err
 	return profitPercent, nil
 }
 
-func (self *Reward) GasUsed(slot *big.Int) (*big.Int, error) {
-	if gas, ok := self.gasUsed[slot.Int64()]; ok {
-		return gas, nil
+var tellorAddress = common.HexToAddress(contracts.TellorAddress)
+
+func (self *Reward) GasUsed(ctx context.Context, slot *big.Int) (*big.Int, error) {
+	ticker := time.NewTicker(1 * time.Second)
+
+	var (
+		vars struct {
+			Challenge  [32]byte
+			RequestIds [5]*big.Int
+			Difficutly *big.Int
+			Tip        *big.Int
+		}
+		err error
+	)
+	// Getting current challenge.
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, errors.New("context cancelled")
+		default:
+		}
+		vars, err = self.contractCaller.GetNewCurrentVariables(nil)
+		if err != nil {
+			level.Debug(self.logger).Log("msg", "calling GetNewCurrentVariables", "err", err)
+			<-ticker.C
+			continue
+		}
+		break
 	}
 
-	return nil, ErrNoDataForSlot{slot: slot.String()}
+	i := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, errors.New("context cancelled")
+		default:
+		}
+		gasPrice, err := self.client.SuggestGasPrice(ctx)
+		if err != nil {
+			level.Debug(self.logger).Log("msg", "calling SuggestGasPrice", "err", err)
+			<-ticker.C
+			continue
+		}
+		reqVals := [5]*big.Int{
+			big.NewInt(math.MaxInt64),
+			big.NewInt(math.MaxInt64),
+			big.NewInt(math.MaxInt64),
+			big.NewInt(math.MaxInt64),
+			big.NewInt(math.MaxInt64),
+		}
+
+		packed, err := self.abi.Pack("submitMiningSolution", "", vars.RequestIds, reqVals)
+		if err != nil {
+			level.Debug(self.logger).Log("msg", "packing submitMiningSolution args", "err", err)
+			return nil, errors.Wrap(err, "packing submitMiningSolution args")
+		}
+		data := ethereum.CallMsg{
+			From:     self.account.Address,
+			To:       &tellorAddress,
+			GasPrice: gasPrice,
+			Data:     packed,
+		}
+		gasUsed, err := self.client.EstimateGas(ctx, data)
+		if err != nil {
+			level.Debug(self.logger).Log("msg", "calling EstimateGas", "err", err)
+			continue
+		}
+		if i%2 == 0 {
+			fmt.Println("gasLimit(random)", gasUsed)
+		} else {
+			fmt.Println("gasLimit(maxInt)", gasUsed)
+		}
+		i++
+		if i == 5 {
+			return nil, ErrNoDataForSlot{slot: slot.String()}
+		}
+		<-ticker.C
+	}
 
 }
 
@@ -122,7 +216,7 @@ func (self *Reward) rewardInEth1e18() (*big.Int, error) {
 }
 
 func (s *Reward) Slot() (*big.Int, error) {
-	slot, err := s.contractCaller.GetUintVar(nil, ethereum.Keccak256([]byte("_SLOT_PROGRESS")))
+	slot, err := s.contractCaller.GetUintVar(nil, eth.Keccak256([]byte("_SLOT_PROGRESS")))
 	if err != nil {
 		return nil, errors.Wrap(err, "getting _SLOT_PROGRESS")
 	}
