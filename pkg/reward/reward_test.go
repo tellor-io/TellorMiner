@@ -39,10 +39,9 @@ func TestProfitCalculation(t *testing.T) {
 
 	for _, rewardAmount := range []float64{5e17, 1e18, 2e18, 3e18} {
 		contractCaller := &MockContractCaler{trbRewardAmount: big.NewInt(int64(rewardAmount))}
-		reward := New(logger, aggregator, contractCaller, nil, nil)
-		reward.SaveGasUsed(slotNum, uint64(gasUsed))
+		reward := New(logger, aggregator, contractCaller)
 
-		rewardAct, err := reward.Current(context.Background(), slotNum, big.NewInt(int64(gasCost)))
+		rewardAct, err := reward.Current(context.Background(), slotNum, big.NewInt(int64(gasCost)), nil, nil)
 		testutil.Ok(t, err)
 		profit := rewardAmount*trbPrice - costTotal
 		profitPercent := (profit / costTotal) * 100

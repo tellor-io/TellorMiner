@@ -18,6 +18,8 @@ import (
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
 	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/tellor-io/telliot/pkg/aggregator"
 	"github.com/tellor-io/telliot/pkg/contracts"
 	"github.com/tellor-io/telliot/pkg/contracts/tellor"
@@ -25,6 +27,11 @@ import (
 )
 
 const ComponentName = "reward"
+
+var tellorAddress = common.HexToAddress(contracts.TellorAddress)
+
+// TODO: Refund gas value.
+var refund uint64 = 0
 
 type ContractCaller interface {
 	GetUintVar(opts *bind.CallOpts, _data [32]byte) (*big.Int, error)
@@ -37,33 +44,34 @@ type ContractCaller interface {
 	}, error)
 }
 
-func New(logger log.Logger, aggr aggregator.IAggregator, contractCaller ContractCaller, client contracts.ETHClient, account *eth.Account) *Reward {
-	// Getting abi.
-	abi, _ := abi.JSON(strings.NewReader(tellor.TellorABI))
+func New(logger log.Logger, aggr aggregator.IAggregator, contractCaller ContractCaller) *Reward {
 	return &Reward{
 		aggr:           aggr,
 		logger:         log.With(logger, "component", ComponentName),
 		contractCaller: contractCaller,
 		gasUsed:        make(map[int64]*big.Int),
-		client:         client,
-		abi:            abi,
-		account:        account,
+		estimatedGasCostValue: promauto.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: "telliot",
+			Subsystem: ComponentName,
+			Name:      "estimated_gas_value",
+			Help:      "The estimated gas value",
+		},
+			[]string{"slot"},
+		),
 	}
 }
 
 type Reward struct {
-	logger         log.Logger
-	aggr           aggregator.IAggregator
-	contractCaller ContractCaller
-	client         contracts.ETHClient
-	gasUsed        map[int64]*big.Int
-	abi            abi.ABI
-	account        *eth.Account
+	logger                log.Logger
+	aggr                  aggregator.IAggregator
+	contractCaller        ContractCaller
+	gasUsed               map[int64]*big.Int
+	estimatedGasCostValue *prometheus.GaugeVec
 }
 
 // Current returns the profit in percents based on the current TRB price.
-func (self *Reward) Current(ctx context.Context, slot *big.Int, gasPriceEth1e18 *big.Int) (int64, error) {
-	gasUsed, err := self.GasUsed(ctx, slot)
+func (self *Reward) Current(ctx context.Context, slot *big.Int, gasPriceEth1e18 *big.Int, client contracts.ETHClient, account *eth.Account) (int64, error) {
+	gasUsed, err := self.GasUsed(ctx, slot, client, account)
 	if err != nil {
 		return 0, err
 	}
@@ -92,10 +100,10 @@ func (self *Reward) Current(ctx context.Context, slot *big.Int, gasPriceEth1e18 
 	return profitPercent, nil
 }
 
-var tellorAddress = common.HexToAddress(contracts.TellorAddress)
-
-func (self *Reward) GasUsed(ctx context.Context, slot *big.Int) (*big.Int, error) {
-	ticker := time.NewTicker(1 * time.Second)
+// GasUsed estimates the gas needed by the transaction.
+func (self *Reward) GasUsed(ctx context.Context, slot *big.Int, client contracts.ETHClient, account *eth.Account) (*big.Int, error) {
+	// Getting abi.
+	abi, _ := abi.JSON(strings.NewReader(tellor.TellorABI))
 
 	var (
 		vars struct {
@@ -107,86 +115,44 @@ func (self *Reward) GasUsed(ctx context.Context, slot *big.Int) (*big.Int, error
 		err error
 	)
 	// Getting current challenge.
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, errors.New("context cancelled")
-		default:
-		}
-		vars, err = self.contractCaller.GetNewCurrentVariables(nil)
-		if err != nil {
-			level.Debug(self.logger).Log("msg", "calling GetNewCurrentVariables", "err", err)
-			<-ticker.C
-			continue
-		}
-		break
+	vars, err = self.contractCaller.GetNewCurrentVariables(&bind.CallOpts{Context: ctx})
+	if err != nil {
+		return nil, errors.Wrap(err, "calling GetNewCurrentVariables")
 	}
-
-	i := 0
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, errors.New("context cancelled")
-		default:
-		}
-		gasPrice, err := self.client.SuggestGasPrice(ctx)
-		if err != nil {
-			level.Debug(self.logger).Log("msg", "calling SuggestGasPrice", "err", err)
-			<-ticker.C
-			continue
-		}
-		reqVals := [5]*big.Int{
-			big.NewInt(math.MaxInt64),
-			big.NewInt(math.MaxInt64),
-			big.NewInt(math.MaxInt64),
-			big.NewInt(math.MaxInt64),
-			big.NewInt(math.MaxInt64),
-		}
-
-		packed, err := self.abi.Pack("submitMiningSolution", "", vars.RequestIds, reqVals)
-		if err != nil {
-			level.Debug(self.logger).Log("msg", "packing submitMiningSolution args", "err", err)
-			return nil, errors.Wrap(err, "packing submitMiningSolution args")
-		}
-		data := ethereum.CallMsg{
-			From:     self.account.Address,
-			To:       &tellorAddress,
-			GasPrice: gasPrice,
-			Data:     packed,
-		}
-		gasUsed, err := self.client.EstimateGas(ctx, data)
-		if err != nil {
-			level.Debug(self.logger).Log("msg", "calling EstimateGas", "err", err)
-			continue
-		}
-		if i%2 == 0 {
-			fmt.Println("gasLimit(random)", gasUsed)
-		} else {
-			fmt.Println("gasLimit(maxInt)", gasUsed)
-		}
-		i++
-		if i == 5 {
-			return nil, ErrNoDataForSlot{slot: slot.String()}
-		}
-		<-ticker.C
+	gasPrice, err := client.SuggestGasPrice(ctx)
+	if err != nil {
+		return nil, err
 	}
-
-}
-
-type ErrNoDataForSlot struct {
-	slot string
-}
-
-func (e ErrNoDataForSlot) Error() string {
-	return "no data for gas used for slot:" + e.slot
-}
-
-// SaveGasUsed calculates the price for a given slot.
-func (self *Reward) SaveGasUsed(slot *big.Int, _gasUsed uint64) {
-	gasUsed := big.NewInt(int64(_gasUsed))
-
-	self.gasUsed[slot.Int64()] = gasUsed
-	level.Info(self.logger).Log("msg", "saved transaction gas used", "amount", gasUsed.Int64(), "slot", slot.Int64())
+	// We don't have actual values here, so we'll use math.MaxInt64 as our values.
+	// As we tested, this won't make any significant difference in the estimated gas value!
+	reqVals := [5]*big.Int{
+		big.NewInt(math.MaxInt64),
+		big.NewInt(math.MaxInt64),
+		big.NewInt(math.MaxInt64),
+		big.NewInt(math.MaxInt64),
+		big.NewInt(math.MaxInt64),
+	}
+	packed, err := abi.Pack("submitMiningSolution", "", vars.RequestIds, reqVals)
+	if err != nil {
+		return nil, errors.Wrap(err, "packing submitMiningSolution args")
+	}
+	data := ethereum.CallMsg{
+		From:     account.Address,
+		To:       &tellorAddress,
+		GasPrice: gasPrice,
+		Data:     packed,
+	}
+	gasUsed, err := client.EstimateGas(ctx, data)
+	if err != nil {
+		return nil, errors.Wrap(err, "calling EstimateGas")
+	}
+	estimation := gasUsed - refund
+	self.estimatedGasCostValue.With(
+		prometheus.Labels{
+			"slot": slot.String(),
+		},
+	).(prometheus.Gauge).Set(float64(estimation))
+	return big.NewInt(int64(estimation)), nil
 }
 
 func (self *Reward) rewardInEth1e18() (*big.Int, error) {
