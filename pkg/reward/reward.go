@@ -15,6 +15,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
 	"github.com/pkg/errors"
@@ -70,7 +71,7 @@ type Reward struct {
 }
 
 // Current returns the profit in percents based on the current TRB price.
-func (self *Reward) Current(ctx context.Context, slot *big.Int, gasPriceEth1e18 *big.Int, client contracts.ETHClient, account *eth.Account) (int64, error) {
+func (self *Reward) Current(ctx context.Context, slot *big.Int, gasPriceEth1e18 *big.Int, client *ethclient.Client, account *eth.Account) (int64, error) {
 	gasUsed, err := self.GasUsed(ctx, slot, client, account)
 	if err != nil {
 		return 0, err
@@ -101,7 +102,7 @@ func (self *Reward) Current(ctx context.Context, slot *big.Int, gasPriceEth1e18 
 }
 
 // GasUsed estimates the gas needed by the transaction.
-func (self *Reward) GasUsed(ctx context.Context, slot *big.Int, client contracts.ETHClient, account *eth.Account) (*big.Int, error) {
+func (self *Reward) GasUsed(ctx context.Context, slot *big.Int, client *ethclient.Client, account *eth.Account) (*big.Int, error) {
 	// Getting abi.
 	abi, _ := abi.JSON(strings.NewReader(tellor.TellorABI))
 

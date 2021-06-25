@@ -319,13 +319,6 @@ func (self *Submitter) Submit(newChallengeReplace context.Context, result *minin
 					).(prometheus.Gauge).Set(float64(reqVals[i].Int64()))
 				}
 
-				slot, err := self.reward.Slot()
-				if err != nil {
-					level.Error(self.logger).Log("msg", "getting _SLOT_PROGRESS for saving gas used", "err", err)
-				} else {
-					self.reward.SaveGasUsed(slot, recieipt.GasUsed)
-				}
-
 				return
 			}
 		}
