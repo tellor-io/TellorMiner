@@ -76,7 +76,7 @@ func New(
 	client *ethclient.Client,
 	contract ContractCaller,
 	account *ethereum.Account,
-	reward *reward.Reward,
+	reward *reward.RewardTracker,
 	transactor transactor.Transactor,
 	gasPriceQuerier gasPrice.GasPriceQuerier,
 	psr *psr.Psr,

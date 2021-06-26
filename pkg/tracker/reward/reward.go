@@ -5,11 +5,13 @@ package reward
 
 import (
 	"context"
+	"fmt"
+	"math"
 	"math/big"
 	"strings"
 	"time"
 
-	"github.com/bluele/gcache"
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
@@ -19,9 +21,15 @@ import (
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
 	"github.com/pkg/errors"
-	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/prometheus/pkg/labels"
+	"github.com/prometheus/prometheus/pkg/timestamp"
+	"github.com/prometheus/prometheus/promql"
+	"github.com/prometheus/prometheus/tsdb"
+
+	"github.com/tellor-io/telliot/pkg/aggregator"
 	"github.com/tellor-io/telliot/pkg/contracts"
 	"github.com/tellor-io/telliot/pkg/contracts/tellor"
+	eth "github.com/tellor-io/telliot/pkg/ethereum"
 	"github.com/tellor-io/telliot/pkg/logging"
 )
 
@@ -32,8 +40,7 @@ type Config struct {
 	LogLevel string
 }
 
-type GasUsageTracker struct {
-	netID            *big.Int
+type RewardTracker struct {
 	client           *ethclient.Client
 	logger           log.Logger
 	contractInstance *contracts.ITellor
@@ -41,26 +48,22 @@ type GasUsageTracker struct {
 	ctx              context.Context
 	stop             context.CancelFunc
 	addrs            []common.Address
-	addrsMap         map[common.Address]struct{} // The same as above but used for quick matching.
 
-	cacheTXsProfit     gcache.Cache
-	cacheTXsCost       gcache.Cache
-	cacheTXsCostFailed gcache.Cache
-	lastFailedBlock    int64
-
-	submitProfit *prometheus.GaugeVec
-	submitCost   *prometheus.GaugeVec
-	balances     *prometheus.GaugeVec
+	tsDB   *tsdb.DB
+	aggr   aggregator.IAggregator
+	engine *promql.Engine
 }
 
-func NewGasUsageTracker(
+func NewRewardTracker(
 	logger log.Logger,
 	ctx context.Context,
 	cfg Config,
+	tsDB *tsdb.DB,
 	client *ethclient.Client,
 	contractInstance *contracts.ITellor,
 	addrs []common.Address,
-) (*GasUsageTracker, error) {
+	aggr aggregator.IAggregator,
+) (*RewardTracker, error) {
 	logger, err := logging.ApplyFilter(cfg.LogLevel, logger)
 	if err != nil {
 		return nil, errors.Wrap(err, "apply filter logger")
@@ -72,36 +75,33 @@ func NewGasUsageTracker(
 		return nil, errors.Wrap(err, "abi read")
 	}
 
-	addrsMap := make(map[common.Address]struct{})
-	for _, addr := range addrs {
-		addrsMap[addr] = struct{}{}
+	opts := promql.EngineOpts{
+		Logger:               logger,
+		Reg:                  nil,
+		MaxSamples:           30000,
+		Timeout:              10 * time.Second,
+		LookbackDelta:        5 * time.Minute,
+		EnableAtModifier:     true,
+		EnableNegativeOffset: true,
 	}
-
-	netID, err := client.NetworkID(ctx)
-	if err != nil {
-		return nil, errors.Wrap(err, "get nerwork ID")
-	}
+	engine := promql.NewEngine(opts)
 
 	ctx, cncl := context.WithCancel(ctx)
-
-	return &GasUsageTracker{
-		netID:            netID,
+	return &RewardTracker{
 		client:           client,
 		logger:           logger,
 		contractInstance: contractInstance,
 		abi:              abi,
 		addrs:            addrs,
-		addrsMap:         addrsMap,
 		ctx:              ctx,
 		stop:             cncl,
-
-		cacheTXsProfit:     gcache.New(50).LRU().Build(),
-		cacheTXsCost:       gcache.New(50).LRU().Build(),
-		cacheTXsCostFailed: gcache.New(20).LRU().Build(),
+		tsDB:             tsDB,
+		engine:           engine,
+		aggr:             aggr,
 	}, nil
 }
 
-func (self *GasUsageTracker) Start() error {
+func (self *RewardTracker) Start() error {
 	level.Info(self.logger).Log("msg", "starting")
 
 	go self.monitorGas()
@@ -110,11 +110,11 @@ func (self *GasUsageTracker) Start() error {
 	return nil
 }
 
-func (self *GasUsageTracker) Stop() {
+func (self *RewardTracker) Stop() {
 	self.stop()
 }
 
-func (self *GasUsageTracker) monitorGas() {
+func (self *RewardTracker) monitorGas() {
 	var err error
 	ticker := time.NewTicker(DefaultRetry)
 	defer ticker.Stop()
@@ -168,12 +168,16 @@ func (self *GasUsageTracker) monitorGas() {
 			level.Info(logger).Log("msg", "re-subscribed to events")
 		case event := <-events:
 			self.recordGasData(event)
-			self.recordGasEstimation()
+			slot, err := self.Slot()
+			if err != nil {
+				level.Error(logger).Log("msg", "getting current slot", "err", err)
+			}
+			self.recordGasEstimation(slot)
 		}
 	}
 }
 
-func (self *GasUsageTracker) recordGasData(event *tellor.TellorNonceSubmitted) {
+func (self *RewardTracker) recordGasData(event *tellor.TellorNonceSubmitted) {
 	ticker := time.NewTicker(DefaultRetry)
 	defer ticker.Stop()
 	for {
@@ -193,7 +197,7 @@ func (self *GasUsageTracker) recordGasData(event *tellor.TellorNonceSubmitted) {
 			// 	return
 			// }
 			level.Debug(self.logger).Log("msg", "adding gas used", "gasUsed", receipt.GasUsed)
-			if err := self.addGasUsed(receipt.GasUsed); err != nil {
+			if err := self.addGasUsed(event.Slot.String(), receipt.GasUsed); err != nil {
 				level.Error(self.logger).Log("msg", "adding gas used", "err", err)
 			}
 			return
@@ -205,17 +209,120 @@ func (self *GasUsageTracker) recordGasData(event *tellor.TellorNonceSubmitted) {
 	}
 }
 
-func (self *GasUsageTracker) addGasUsed(gasUsed uint64) error {
-	// TODO:
+func (self *RewardTracker) addGasUsed(slot string, gasUsed uint64) error {
+	var err error
+	appender := self.tsDB.Appender(self.ctx)
+
+	// Round up the time so that all appends happen with the same TS and
+	// avoid out of order samples errors.
+	ts := timestamp.FromTime(time.Now().Round(5 * time.Second))
+
+	defer func() { // An appender always needs to be committed or rolled back.
+		if err != nil {
+			if err := appender.Rollback(); err != nil {
+				level.Error(self.logger).Log("msg", "db rollback failed", "err", err)
+			}
+			return
+		}
+		if errC := appender.Commit(); errC != nil {
+			err = errors.Wrap(err, "db append commit failed")
+		}
+	}()
+	lbls := labels.Labels{
+		labels.Label{Name: "__name__", Value: "gas_actual_value"},
+		labels.Label{Name: "__slot__", Value: slot},
+	}
+
+	_, err = appender.Append(0, lbls, ts, float64(gasUsed))
+	if err != nil {
+		return errors.Wrap(err, "append values to the DB")
+	}
 	return nil
 }
 
-func (self *GasUsageTracker) recordGasEstimation() error {
-	// TODO:
+func (self *RewardTracker) recordGasEstimation(slot *big.Int) {
+	// Getting abi.
+	abi, _ := abi.JSON(strings.NewReader(tellor.TellorABI))
+
+	var (
+		vars struct {
+			Challenge  [32]byte
+			RequestIds [5]*big.Int
+			Difficutly *big.Int
+			Tip        *big.Int
+		}
+		err error
+	)
+	// Getting current challenge.
+	vars, err = self.contractInstance.GetNewCurrentVariables(&bind.CallOpts{Context: self.ctx})
+	if err != nil {
+		level.Error(self.logger).Log("msg", "call GetNewCurrentVariables", "err", err)
+	}
+	gasPrice, err := self.client.SuggestGasPrice(self.ctx)
+	if err != nil {
+		level.Error(self.logger).Log("msg", "call client.SuggestGasPrice", "err", err)
+	}
+	// We don't have actual values here, so we'll use math.MaxInt64 as our values.
+	// As we tested, this won't make any significant difference in the estimated gas value!
+	reqVals := [5]*big.Int{
+		big.NewInt(math.MaxInt64),
+		big.NewInt(math.MaxInt64),
+		big.NewInt(math.MaxInt64),
+		big.NewInt(math.MaxInt64),
+		big.NewInt(math.MaxInt64),
+	}
+	packed, err := abi.Pack("submitMiningSolution", "", vars.RequestIds, reqVals)
+	if err != nil {
+		level.Error(self.logger).Log("msg", "packing submitMiningSolution args", "err", err)
+	}
+	data := ethereum.CallMsg{
+		From:     self.addrs[0],
+		To:       &self.contractInstance.Address,
+		GasPrice: gasPrice,
+		Data:     packed,
+	}
+	gasEstimation, err := self.client.EstimateGas(self.ctx, data)
+	if err != nil {
+		level.Error(self.logger).Log("msg", "call client.EstimateGas", "err", err)
+	}
+	err = self.addGasEstimation(slot, gasEstimation)
+	if err != nil {
+		level.Error(self.logger).Log("msg", "add gas estimation to the db", "err", err)
+	}
+}
+
+func (self *RewardTracker) addGasEstimation(slot *big.Int, gasEstimation uint64) error {
+	var err error
+	appender := self.tsDB.Appender(self.ctx)
+
+	// Round up the time so that all appends happen with the same TS and
+	// avoid out of order samples errors.
+	ts := timestamp.FromTime(time.Now().Round(5 * time.Second))
+
+	defer func() { // An appender always needs to be committed or rolled back.
+		if err != nil {
+			if err := appender.Rollback(); err != nil {
+				level.Error(self.logger).Log("msg", "db rollback failed", "err", err)
+			}
+			return
+		}
+		if errC := appender.Commit(); errC != nil {
+			err = errors.Wrap(err, "db append commit failed")
+		}
+	}()
+	lbls := labels.Labels{
+		labels.Label{Name: "__name__", Value: "gas_estimation_value"},
+		labels.Label{Name: "__slot__", Value: slot.String()},
+	}
+
+	_, err = appender.Append(0, lbls, ts, float64(gasEstimation))
+	if err != nil {
+		return errors.Wrap(err, "append values to the DB")
+	}
 	return nil
 }
 
-func (self *GasUsageTracker) nonceSubmittedSub(output chan *tellor.TellorNonceSubmitted) (event.Subscription, error) {
+func (self *RewardTracker) nonceSubmittedSub(output chan *tellor.TellorNonceSubmitted) (event.Subscription, error) {
 	tellorFilterer, err := tellor.NewTellorFilterer(self.contractInstance.Address, self.client)
 	if err != nil {
 		return nil, errors.Wrap(err, "getting instance")
@@ -229,4 +336,91 @@ func (self *GasUsageTracker) nonceSubmittedSub(output chan *tellor.TellorNonceSu
 
 func txIDNonceSubmit(event *tellor.TellorNonceSubmitted) string {
 	return event.Raw.TxHash.String() + event.Miner.String()
+}
+
+// Current returns the profit in percents based on the current TRB price.
+func (self *RewardTracker) Current(ctx context.Context, slot *big.Int, gasPriceEth1e18 *big.Int) (int64, error) {
+	gasUsed, err := self.GasUsed(ctx, slot)
+	if err != nil {
+		return 0, err
+	}
+
+	rewardEth1e18, err := self.rewardInEth1e18()
+	if err != nil {
+		return 0, errors.New("getting trb current TRB price")
+	}
+
+	txCostEth1e18 := big.NewInt(0).Mul(gasPriceEth1e18, gasUsed)
+	profit := big.NewInt(0).Sub(rewardEth1e18, txCostEth1e18)
+	profitPercentFloat := float64(profit.Int64()) / float64(txCostEth1e18.Int64()) * 100
+	profitPercent := int64(profitPercentFloat)
+
+	level.Debug(self.logger).Log(
+		"msg", "profit checking",
+		"reward", fmt.Sprintf("%.2e", float64(rewardEth1e18.Int64())),
+		"txCost", fmt.Sprintf("%.2e", float64(txCostEth1e18.Int64())),
+		"slot", slot,
+		"gasUsed", gasUsed,
+		"gasPrice", gasPriceEth1e18,
+		"profit", fmt.Sprintf("%.2e", float64(profit.Int64())),
+		"profitMargin", profitPercent,
+	)
+
+	return profitPercent, nil
+}
+
+// GasUsed estimates the gas needed by the transaction.
+func (self *RewardTracker) GasUsed(ctx context.Context, slot *big.Int) (*big.Int, error) {
+	query, err := self.engine.NewInstantQuery(
+		self.tsDB,
+		`gas_used_estimation{__slot__="`+slot.String()+`"} - `+`gas_used_actual{__slot__="`+slot.String()+`"}`,
+		time.Now(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer query.Close()
+	refund := query.Exec(self.ctx)
+	if refund.Err != nil {
+		return nil, errors.Wrapf(refund.Err, "error evaluating query:%v", query.Statement())
+	}
+	if len(refund.Value.(promql.Vector)) == 0 {
+		return nil, errors.Errorf("no vals for refund interval query:%v", query.Statement())
+	}
+
+	return big.NewInt(int64(refund.Value.(promql.Vector)[0].V)), nil
+}
+
+func (self *RewardTracker) rewardInEth1e18() (*big.Int, error) {
+	trbAmount1e18, err := self.contractInstance.CurrentReward(nil)
+	if err != nil {
+		return nil, errors.New("getting currentReward from the chain")
+	}
+
+	trbPrice, confidence, err := self.aggr.TimeWeightedAvg("TRB/ETH", time.Now(), time.Hour)
+	if err != nil {
+		return nil, errors.New("getting the trb price from the aggregator")
+	}
+
+	if confidence < 0.5 {
+		return nil, errors.New("trb price confidence too low")
+
+	}
+
+	rewardEth1e18 := big.NewFloat(0).Mul(big.NewFloat(0).SetInt(trbAmount1e18), big.NewFloat(trbPrice))
+
+	rewardEth1e18Int, accuracy := rewardEth1e18.Int64()
+	if accuracy != big.Exact {
+		return nil, errors.New("conversion precision loss")
+	}
+
+	return big.NewInt(rewardEth1e18Int), nil
+}
+
+func (self *RewardTracker) Slot() (*big.Int, error) {
+	slot, err := self.contractInstance.GetUintVar(nil, eth.Keccak256([]byte("_SLOT_PROGRESS")))
+	if err != nil {
+		return nil, errors.Wrap(err, "getting _SLOT_PROGRESS")
+	}
+	return slot, nil
 }
