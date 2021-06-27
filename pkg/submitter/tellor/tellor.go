@@ -239,7 +239,9 @@ func (self *Submitter) profitPercent() (int64, error) {
 		slot.SetInt64(0)
 	}
 
-	return self.reward.Current(self.ctx, slot, big.NewInt(int64(gasPrice)))
+	ctx, cncl := context.WithTimeout(self.ctx, 3*time.Second)
+	defer cncl()
+	return self.reward.Current(ctx, slot, big.NewInt(int64(gasPrice)))
 }
 
 func (self *Submitter) Submit(newChallengeReplace context.Context, result *mining.Result) {
