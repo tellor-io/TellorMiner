@@ -48,7 +48,7 @@ type RewardTracker struct {
 	abi              abi.ABI
 	ctx              context.Context
 	stop             context.CancelFunc
-	addrs            []common.Address
+	addr             common.Address
 
 	tsDB   *tsdb.DB
 	aggr   aggregator.IAggregator
@@ -62,7 +62,7 @@ func NewRewardTracker(
 	tsDB *tsdb.DB,
 	client *ethclient.Client,
 	contractInstance *contracts.ITellor,
-	addrs []common.Address,
+	addr common.Address,
 	aggr aggregator.IAggregator,
 ) (*RewardTracker, error) {
 	logger, err := logging.ApplyFilter(cfg.LogLevel, logger)
@@ -93,7 +93,7 @@ func NewRewardTracker(
 		logger:           logger,
 		contractInstance: contractInstance,
 		abi:              abi,
-		addrs:            addrs,
+		addr:             addr,
 		ctx:              ctx,
 		stop:             cncl,
 		tsDB:             tsDB,
@@ -172,10 +172,9 @@ func (self *RewardTracker) monitorGas() {
 			if err != nil {
 				level.Error(self.logger).Log("msg", "record gas usage", "err", err)
 			}
-			ctx, _ := context.WithTimeout(self.ctx, 2*time.Second)
-			err = self.recordGasUsageEstimated(ctx)
+			err = self.recordGasUsageEstimated(self.ctx)
 			if err != nil {
-				level.Error(self.logger).Log("msg", "record gas usage estimated", "err", err)
+				level.Error(self.logger).Log("msg", "record gas usage estimation", "err", err)
 			}
 		}
 	}
@@ -221,7 +220,7 @@ func (self *RewardTracker) addGasUsed(slot string, gasUsed uint64) error {
 	}()
 	lbls := labels.Labels{
 		labels.Label{Name: "__name__", Value: "gas_usage_actual"},
-		labels.Label{Name: "__slot__", Value: slot},
+		labels.Label{Name: "slot", Value: slot},
 	}
 
 	_, err = appender.Append(0, lbls, ts, float64(gasUsed))
@@ -232,18 +231,13 @@ func (self *RewardTracker) addGasUsed(slot string, gasUsed uint64) error {
 }
 
 func (self *RewardTracker) recordGasUsageEstimated(ctx context.Context) error {
+	ctx, cncl := context.WithTimeout(ctx, 2*time.Second)
+	defer cncl()
 	// Getting abi.
-	abi, _ := abi.JSON(strings.NewReader(tellor.TellorABI))
-
-	var (
-		vars struct {
-			Challenge  [32]byte
-			RequestIds [5]*big.Int
-			Difficutly *big.Int
-			Tip        *big.Int
-		}
-		err error
-	)
+	abi, err := abi.JSON(strings.NewReader(tellor.TellorABI))
+	if err != nil {
+		return errors.Wrap(err, "getting abi")
+	}
 
 	// Getting current slot.
 	slot, err := self.Slot()
@@ -252,7 +246,7 @@ func (self *RewardTracker) recordGasUsageEstimated(ctx context.Context) error {
 	}
 
 	// Getting current challenge.
-	vars, err = self.contractInstance.GetNewCurrentVariables(&bind.CallOpts{Context: ctx})
+	vars, err := self.contractInstance.GetNewCurrentVariables(&bind.CallOpts{Context: ctx})
 	if err != nil {
 		return errors.Wrap(err, "call GetNewCurrentVariables")
 	}
@@ -270,9 +264,9 @@ func (self *RewardTracker) recordGasUsageEstimated(ctx context.Context) error {
 		return errors.Wrap(err, "packing submitMiningSolution args")
 	}
 	data := ethereum.CallMsg{
-		From: self.addrs[0],
+		From: self.addr,
 		To:   &self.contractInstance.Address,
-		// Hardcoded gas price. looks like it doesn't matter in the calculation.
+		// Hardcoded gas price. Looks like it doesn't matter in the calculation.
 		GasPrice: big.NewInt(0).Mul(big.NewInt(30), big.NewInt(params.GWei)),
 		Data:     packed,
 	}
@@ -308,7 +302,7 @@ func (self *RewardTracker) addGasEstimation(slot *big.Int, gasEstimation uint64)
 	}()
 	lbls := labels.Labels{
 		labels.Label{Name: "__name__", Value: "gas_usage_estimated"},
-		labels.Label{Name: "__slot__", Value: slot.String()},
+		labels.Label{Name: "slot", Value: slot.String()},
 	}
 
 	_, err = appender.Append(0, lbls, ts, float64(gasEstimation))
@@ -323,7 +317,7 @@ func (self *RewardTracker) nonceSubmittedSub(output chan *tellor.TellorNonceSubm
 	if err != nil {
 		return nil, errors.Wrap(err, "getting instance")
 	}
-	sub, err := tellorFilterer.WatchNonceSubmitted(&bind.WatchOpts{Context: self.ctx}, output, self.addrs, nil)
+	sub, err := tellorFilterer.WatchNonceSubmitted(&bind.WatchOpts{Context: self.ctx}, output, []common.Address{}, nil)
 	if err != nil {
 		return nil, errors.Wrap(err, "getting channel")
 	}
@@ -365,7 +359,7 @@ func (self *RewardTracker) Current(ctx context.Context, slot *big.Int, gasPriceE
 func (self *RewardTracker) GasUsed(ctx context.Context, slot *big.Int) (*big.Int, error) {
 	query, err := self.engine.NewInstantQuery(
 		self.tsDB,
-		`last_over_time(gas_usage_estimated{__slot__="`+slot.String()+`"}[1d]) - `+`last_over_time(gas_usage_actual{__slot__="`+slot.String()+`"}[1d])`,
+		`last_over_time(gas_usage_estimated{slot="`+slot.String()+`"}[1d]) - `+`last_over_time(gas_usage_actual{slot="`+slot.String()+`"}[1d])`,
 		time.Now(),
 	)
 	if err != nil {
