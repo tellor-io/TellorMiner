@@ -27,6 +27,7 @@ import (
 	"github.com/tellor-io/telliot/pkg/tracker/dispute"
 	"github.com/tellor-io/telliot/pkg/tracker/index"
 	"github.com/tellor-io/telliot/pkg/tracker/profit"
+	"github.com/tellor-io/telliot/pkg/tracker/reward"
 	"github.com/tellor-io/telliot/pkg/transactor"
 	"github.com/tellor-io/telliot/pkg/web"
 )
@@ -38,6 +39,7 @@ type Config struct {
 	SubmitterTellor           tellor.Config
 	SubmitterTellorMesosphere tellorMesosphere.Config
 	ProfitTracker             profit.Config
+	RewardTracker             reward.Config
 	Tasker                    tasker.Config
 	Transactor                transactor.Config
 	IndexTracker              index.Config
@@ -70,6 +72,9 @@ var DefaultConfig = Config{
 		LogLevel: "info",
 	},
 	ProfitTracker: profit.Config{
+		LogLevel: "info",
+	},
+	RewardTracker: reward.Config{
 		LogLevel: "info",
 	},
 	DisputeTracker: dispute.Config{

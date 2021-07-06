@@ -25,7 +25,7 @@ import (
 	"github.com/tellor-io/telliot/pkg/logging"
 	"github.com/tellor-io/telliot/pkg/mining"
 	psr "github.com/tellor-io/telliot/pkg/psr/tellor"
-	"github.com/tellor-io/telliot/pkg/reward"
+	"github.com/tellor-io/telliot/pkg/tracker/reward"
 	"github.com/tellor-io/telliot/pkg/transactor"
 )
 
@@ -64,7 +64,7 @@ type Submitter struct {
 	submitValue     *prometheus.GaugeVec
 	lastSubmitCncl  context.CancelFunc
 	transactor      transactor.Transactor
-	reward          *reward.Reward
+	reward          *reward.RewardQuerier
 	gasPriceQuerier gasPrice.GasPriceQuerier
 	psr             *psr.Psr
 }
@@ -76,7 +76,7 @@ func New(
 	client *ethclient.Client,
 	contract ContractCaller,
 	account *ethereum.Account,
-	reward *reward.RewardTracker,
+	reward *reward.RewardQuerier,
 	transactor transactor.Transactor,
 	gasPriceQuerier gasPrice.GasPriceQuerier,
 	psr *psr.Psr,
@@ -241,7 +241,7 @@ func (self *Submitter) profitPercent() (int64, error) {
 
 	ctx, cncl := context.WithTimeout(self.ctx, 3*time.Second)
 	defer cncl()
-	return self.reward.Current(ctx, slot, big.NewInt(int64(gasPrice)))
+	return self.reward.Current(ctx, slot, gasPrice)
 }
 
 func (self *Submitter) Submit(newChallengeReplace context.Context, result *mining.Result) {

@@ -23,13 +23,13 @@ import (
 	"github.com/go-kit/kit/log/level"
 	"github.com/pkg/errors"
 	"github.com/prometheus/prometheus/pkg/labels"
-	"github.com/prometheus/prometheus/pkg/timestamp"
 	"github.com/prometheus/prometheus/promql"
 	"github.com/prometheus/prometheus/tsdb"
 
 	"github.com/tellor-io/telliot/pkg/aggregator"
 	"github.com/tellor-io/telliot/pkg/contracts"
 	"github.com/tellor-io/telliot/pkg/contracts/tellor"
+	"github.com/tellor-io/telliot/pkg/db"
 	eth "github.com/tellor-io/telliot/pkg/ethereum"
 	"github.com/tellor-io/telliot/pkg/logging"
 )
@@ -105,17 +105,6 @@ func NewRewardTracker(
 func (self *RewardTracker) Start() error {
 	level.Info(self.logger).Log("msg", "starting")
 
-	go self.monitorGas()
-
-	<-self.ctx.Done()
-	return nil
-}
-
-func (self *RewardTracker) Stop() {
-	self.stop()
-}
-
-func (self *RewardTracker) monitorGas() {
 	var err error
 	ticker := time.NewTicker(DefaultRetry)
 	defer ticker.Stop()
@@ -127,7 +116,7 @@ func (self *RewardTracker) monitorGas() {
 	for {
 		select {
 		case <-self.ctx.Done():
-			return
+			return errors.New("context canceled")
 		default:
 		}
 		sub, err = self.nonceSubmittedSub(events)
@@ -142,7 +131,7 @@ func (self *RewardTracker) monitorGas() {
 	for {
 		select {
 		case <-self.ctx.Done():
-			return
+			return errors.New("context canceled")
 		case err := <-sub.Err():
 			if err != nil {
 				level.Error(logger).Log(
@@ -155,7 +144,7 @@ func (self *RewardTracker) monitorGas() {
 			for {
 				select {
 				case <-self.ctx.Done():
-					return
+					return errors.New("context canceled")
 				default:
 				}
 				sub, err = self.nonceSubmittedSub(events)
@@ -172,7 +161,7 @@ func (self *RewardTracker) monitorGas() {
 			if err != nil {
 				level.Error(self.logger).Log("msg", "record gas usage", "err", err)
 			}
-			err = self.recordGasUsageEstimated(self.ctx)
+			err = self.recordGasUsageEstimated()
 			if err != nil {
 				level.Error(self.logger).Log("msg", "record gas usage estimation", "err", err)
 			}
@@ -180,16 +169,15 @@ func (self *RewardTracker) monitorGas() {
 	}
 }
 
+func (self *RewardTracker) Stop() {
+	self.stop()
+}
+
 func (self *RewardTracker) recordGasUsage(event *tellor.TellorNonceSubmitted) error {
 	receipt, err := self.client.TransactionReceipt(self.ctx, event.Raw.TxHash)
 	if err != nil {
 		return errors.Wrap(err, "receipt retrieval")
-	} else if receipt != nil && receipt.Status == types.ReceiptStatusSuccessful { // Failed transactions cost is monitored in a different process.
-		// tx, _, err := self.client.TransactionByHash(self.ctx, event.Raw.TxHash)
-		// if err != nil {
-		// 	level.Error(self.logger).Log("msg", "get transaction by hash", "err", err)
-		// 	return
-		// }
+	} else if receipt != nil && receipt.Status == types.ReceiptStatusSuccessful {
 		level.Debug(self.logger).Log("msg", "adding gas used", "gasUsed", receipt.GasUsed)
 		if err := self.addGasUsed(event.Slot.String(), receipt.GasUsed); err != nil {
 			return errors.Wrap(err, "adding gas used")
@@ -199,41 +187,9 @@ func (self *RewardTracker) recordGasUsage(event *tellor.TellorNonceSubmitted) er
 	return errors.New("transaction not yet mined")
 }
 
-func (self *RewardTracker) addGasUsed(slot string, gasUsed uint64) error {
-	var err error
-	appender := self.tsDB.Appender(self.ctx)
-
-	// Round up the time so that all appends happen with the same TS and
-	// avoid out of order samples errors.
-	ts := timestamp.FromTime(time.Now().Round(5 * time.Second))
-
-	defer func() { // An appender always needs to be committed or rolled back.
-		if err != nil {
-			if err := appender.Rollback(); err != nil {
-				level.Error(self.logger).Log("msg", "db rollback failed", "err", err)
-			}
-			return
-		}
-		if errC := appender.Commit(); errC != nil {
-			err = errors.Wrap(err, "db append commit failed")
-		}
-	}()
-	lbls := labels.Labels{
-		labels.Label{Name: "__name__", Value: "gas_usage_actual"},
-		labels.Label{Name: "slot", Value: slot},
-	}
-
-	_, err = appender.Append(0, lbls, ts, float64(gasUsed))
-	if err != nil {
-		return errors.Wrap(err, "append values to the DB")
-	}
-	return nil
-}
-
-func (self *RewardTracker) recordGasUsageEstimated(ctx context.Context) error {
-	ctx, cncl := context.WithTimeout(ctx, 2*time.Second)
+func (self *RewardTracker) recordGasUsageEstimated() error {
+	ctx, cncl := context.WithTimeout(self.ctx, 2*time.Second)
 	defer cncl()
-	// Getting abi.
 	abi, err := abi.JSON(strings.NewReader(tellor.TellorABI))
 	if err != nil {
 		return errors.Wrap(err, "getting abi")
@@ -250,8 +206,8 @@ func (self *RewardTracker) recordGasUsageEstimated(ctx context.Context) error {
 	if err != nil {
 		return errors.Wrap(err, "call GetNewCurrentVariables")
 	}
-	// We don't have actual values here, so we'll use math.MaxInt64 as our values.
-	// As we tested, this won't make any significant difference in the estimated gas value!
+	// Use arbitrary values as when tested didn't make a noticeable difference
+	// between using real vs arbitrary values.
 	reqVals := [5]*big.Int{
 		big.NewInt(math.MaxInt64),
 		big.NewInt(math.MaxInt64),
@@ -282,32 +238,23 @@ func (self *RewardTracker) recordGasUsageEstimated(ctx context.Context) error {
 }
 
 func (self *RewardTracker) addGasEstimation(slot *big.Int, gasEstimation uint64) error {
-	var err error
-	appender := self.tsDB.Appender(self.ctx)
-
-	// Round up the time so that all appends happen with the same TS and
-	// avoid out of order samples errors.
-	ts := timestamp.FromTime(time.Now().Round(5 * time.Second))
-
-	defer func() { // An appender always needs to be committed or rolled back.
-		if err != nil {
-			if err := appender.Rollback(); err != nil {
-				level.Error(self.logger).Log("msg", "db rollback failed", "err", err)
-			}
-			return
-		}
-		if errC := appender.Commit(); errC != nil {
-			err = errors.Wrap(err, "db append commit failed")
-		}
-	}()
 	lbls := labels.Labels{
 		labels.Label{Name: "__name__", Value: "gas_usage_estimated"},
 		labels.Label{Name: "slot", Value: slot.String()},
 	}
+	if err := db.Add(self.ctx, self.logger, self.tsDB, lbls, float64(gasEstimation)); err != nil {
+		return errors.Wrap(err, "adding gasEstimation value to the db")
+	}
+	return nil
+}
 
-	_, err = appender.Append(0, lbls, ts, float64(gasEstimation))
-	if err != nil {
-		return errors.Wrap(err, "append values to the DB")
+func (self *RewardTracker) addGasUsed(slot string, gasUsed uint64) error {
+	lbls := labels.Labels{
+		labels.Label{Name: "__name__", Value: "gas_usage_actual"},
+		labels.Label{Name: "slot", Value: slot},
+	}
+	if err := db.Add(self.ctx, self.logger, self.tsDB, lbls, float64(gasUsed)); err != nil {
+		return errors.Wrap(err, "adding gasUsed value to the db")
 	}
 	return nil
 }
@@ -373,7 +320,6 @@ func (self *RewardTracker) GasUsed(ctx context.Context, slot *big.Int) (*big.Int
 	if len(refund.Value.(promql.Vector)) == 0 {
 		return nil, errors.Errorf("no vals for refund interval query:%v", query.Statement())
 	}
-
 	return big.NewInt(int64(refund.Value.(promql.Vector)[0].V)), nil
 }
 
