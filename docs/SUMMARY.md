@@ -4,8 +4,8 @@
 
 ## Docs
 
-* [Internal architecture](internal-architecture.md)
-  * [Index Tracker](index-tracker.md)
+* [Internal architecture](internal-architecture/README.md)
+  * [Index Tracker](internal-architecture/index-tracker.md)
 * [Setup and usage](setup-and-usage.md)
 * [Configuration reference](configuration.md)
 * [Contributing](contributing.md)
