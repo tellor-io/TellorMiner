@@ -60,6 +60,16 @@ spec:
             secretKeyRef:
               name: telliot-m
               key: CMC_KEY
+        - name: RAPID_KEY
+          valueFrom:
+            secretKeyRef:
+              name: telliot-m
+              key: RAPID_KEY
+        - name: ANYBLOCK_KEY
+          valueFrom:
+            secretKeyRef:
+              name: telliot-m
+              key: ANYBLOCK_KEY
       volumes:
       - name: configs
         configMap:

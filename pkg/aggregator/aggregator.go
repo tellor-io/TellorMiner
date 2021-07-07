@@ -354,9 +354,9 @@ func (self *Aggregator) median(vals []float64) (float64, float64) {
 	position := len(vals) / 2
 	price := vals[position]
 
-	// When number of vals is odd need to use the mean
+	// When number of vals is even need to use the mean
 	// of the 2 middle vals.
-	if len(vals)%2 != 0 {
+	if len(vals)%2 == 0 {
 		price = (vals[position-1] + vals[position]) / 2
 	}
 

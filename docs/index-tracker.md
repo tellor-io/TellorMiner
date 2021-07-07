@@ -10,12 +10,12 @@ The structure of the file is as follow:
 
 ```javascript
 {
-    "VIXEOD": {
-        "interval": "1m",
+    "AMPL/USD/VWAP": {
+        "interval": "10m",
         "endpoints": [
             {
-                "URL": "https://www.quandl.com/api/v3/datasets/CHRIS/CBOE_VX1.json?api_key=${API_KEY}",
-                "param": "$.dataset.data[0][4]"
+                "URL": "https://api.anyblock.tools/market/AMPL_USD_via_ALL/daily-volume?roundDay=false&debug=false&access_token=$ANYBLOCK_KEY&start=$NOW&end=$EOD",
+                "param": "$.overallVWAP"
             }
         ]
     },
@@ -34,8 +34,10 @@ The structure of the file is as follow:
 }
 ```
 
-Any env variable is substituted in the API URL. The example above uses `API_KEY` env variable.
-This is needed as some API endpoints require api key to allows access or to increase API throtling.
+Any env variable is substituted in the API URL. The example above uses an env variable to provide the api key required to access the endpoint.
+
+There are some special env variables that can be added to the url and are dinamycly expanded before each request - `$NOW`, `$EOD`. This is required for some APIs that require specifying start and end timestamp like in the example above.
+
 
 ## Index Tracker types
 

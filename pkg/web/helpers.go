@@ -8,6 +8,8 @@ import (
 	"crypto/tls"
 	"io/ioutil"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/pkg/errors"
@@ -20,7 +22,7 @@ func Get(ctx context.Context, url string, headers map[string]string) ([]byte, er
 	client := http.Client{Transport: tr}
 	ticker := time.NewTicker(1 * time.Second)
 
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequest("GET", ExpandTimeVars(url), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -68,4 +70,15 @@ func Get(ctx context.Context, url string, headers map[string]string) ([]byte, er
 
 	return nil, errFinal
 
+}
+
+func ExpandTimeVars(url string) string {
+	nowMillisecons := strconv.Itoa(int(time.Now().Unix() * 1000))
+	url = strings.Replace(url, "$NOW", nowMillisecons, -1)
+
+	millsIn1day := 86400000
+	eodMillisecons := strconv.Itoa(int(time.Now().Unix()*1000) - millsIn1day)
+	url = strings.Replace(url, "$EOD", eodMillisecons, -1)
+
+	return url
 }
