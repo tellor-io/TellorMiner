@@ -15,7 +15,7 @@ import (
 	"github.com/go-kit/kit/log/level"
 	"github.com/pkg/errors"
 	"github.com/prometheus/prometheus/promql"
-	"github.com/prometheus/prometheus/tsdb"
+	"github.com/prometheus/prometheus/storage"
 
 	"github.com/tellor-io/telliot/pkg/aggregator"
 	"github.com/tellor-io/telliot/pkg/contracts"
@@ -30,7 +30,7 @@ type RewardQuerier struct {
 	ctx              context.Context
 	stop             context.CancelFunc
 
-	tsDB   *tsdb.DB
+	tsDB   storage.SampleAndChunkQueryable
 	aggr   aggregator.IAggregator
 	engine *promql.Engine
 }
@@ -39,7 +39,7 @@ func NewRewardQuerier(
 	logger log.Logger,
 	ctx context.Context,
 	cfg Config,
-	tsDB *tsdb.DB,
+	tsDB storage.SampleAndChunkQueryable,
 	client *ethclient.Client,
 	contractInstance *contracts.ITellor,
 	addr common.Address,

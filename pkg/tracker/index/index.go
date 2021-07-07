@@ -25,6 +25,7 @@ import (
 	"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/prometheus/prometheus/pkg/timestamp"
 	"github.com/prometheus/prometheus/tsdb"
+	"github.com/tellor-io/telliot/pkg/db"
 	"github.com/tellor-io/telliot/pkg/ethereum"
 	"github.com/tellor-io/telliot/pkg/format"
 	"github.com/tellor-io/telliot/pkg/logging"
@@ -220,7 +221,7 @@ func (self *IndexTracker) record(delay time.Duration, symbol string, interval ti
 
 		// Record the source interval to use it for the confidence calculation.
 		// Confidence = avg(actualSamplesCount/expectedMaxSamplesCount) for a given period.
-		if err := self.recordInterval(logger, ts, interval, symbol, dataSource); err != nil {
+		if err := self.recordInterval(ts, interval, symbol, dataSource); err != nil {
 			level.Error(logger).Log("msg", "record interval to the DB", "err", err)
 		}
 
@@ -238,23 +239,11 @@ func (self *IndexTracker) record(delay time.Duration, symbol string, interval ti
 	}
 }
 
-func (self *IndexTracker) recordInterval(logger log.Logger, ts int64, interval time.Duration, symbol string, dataSource DataSource) (err error) {
+func (self *IndexTracker) recordInterval(ts int64, interval time.Duration, symbol string, dataSource DataSource) (err error) {
 	source, err := url.Parse(dataSource.Source())
 	if err != nil {
 		return errors.Wrap(err, "parsing url from data source")
 	}
-	appender := self.tsDB.Appender(self.ctx)
-	defer func() { // An appender always needs to be committed or rolled back.
-		if err != nil {
-			if err := appender.Rollback(); err != nil {
-				level.Error(logger).Log("msg", "db rollback failed", "err", err)
-			}
-			return
-		}
-		if errC := appender.Commit(); errC != nil {
-			err = errors.Wrap(err, "db append commit failed")
-		}
-	}()
 
 	lbls := labels.Labels{
 		labels.Label{Name: "__name__", Value: IntervalMetricName},
@@ -265,11 +254,7 @@ func (self *IndexTracker) recordInterval(logger log.Logger, ts int64, interval t
 
 	sort.Sort(lbls) // This is important! The labels need to be sorted to avoid creating the same series with duplicate reference.
 
-	_, err = appender.Append(0, lbls, ts, float64(interval))
-	if err != nil {
-		return errors.Wrap(err, "append values to the DB")
-	}
-	return nil
+	return db.Add(self.ctx, self.tsDB, lbls, float64(interval), ts)
 }
 
 func (self *IndexTracker) recordValue(logger log.Logger, ts int64, interval time.Duration, symbol string, dataSource DataSource) (err error) {
@@ -287,20 +272,6 @@ func (self *IndexTracker) recordValue(logger log.Logger, ts int64, interval time
 	if err != nil {
 		return errors.Wrap(err, "parsing url from data source")
 	}
-	appender := self.tsDB.Appender(self.ctx)
-	defer func() { // An appender always needs to be committed or rolled back.
-		if err != nil {
-			if err := appender.Rollback(); err != nil {
-				level.Error(logger).Log("msg", "db rollback failed", "err", err)
-				return
-			}
-			level.Debug(logger).Log("msg", "added interval to db", "source", dataSource.Source(), "host", source.Host, "symbol", format.SanitizeMetricName(symbol), "value", value, "interval", interval)
-			return
-		}
-		if errC := appender.Commit(); errC != nil {
-			err = errors.Wrap(err, "db append commit failed")
-		}
-	}()
 
 	lbls := labels.Labels{
 		labels.Label{Name: "__name__", Value: ValueMetricName},
@@ -308,12 +279,12 @@ func (self *IndexTracker) recordValue(logger log.Logger, ts int64, interval time
 		labels.Label{Name: "domain", Value: source.Host},
 		labels.Label{Name: "symbol", Value: format.SanitizeMetricName(symbol)},
 	}
-	sort.Sort(lbls) // This is important! The labels need to be sorted to avoid creating the same series with duplicate reference.
 
-	_, err = appender.Append(0, lbls, ts, value)
+	err = db.Add(self.ctx, self.tsDB, lbls, value, ts)
 	if err != nil {
 		return errors.Wrap(err, "append values to the DB")
 	}
+	level.Debug(logger).Log("msg", "added interval to db", "source", dataSource.Source(), "host", source.Host, "symbol", format.SanitizeMetricName(symbol), "value", value, "interval", interval)
 
 	self.value.With(
 		prometheus.Labels{

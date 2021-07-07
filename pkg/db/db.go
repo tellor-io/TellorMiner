@@ -5,12 +5,12 @@ package db
 
 import (
 	"context"
+	"sort"
 
 	"net/url"
 	"strconv"
 	"time"
 
-	"github.com/go-kit/log"
 	"github.com/pkg/errors"
 	promConfig "github.com/prometheus/common/config"
 	"github.com/prometheus/common/model"
@@ -58,13 +58,16 @@ func NewRemoteDB(cfg Config) (storage.SampleAndChunkQueryable, error) {
 	), nil
 }
 
-func Add(ctx context.Context, logger log.Logger, tsdb *tsdb.DB, lbls labels.Labels, value float64) error {
+func Add(ctx context.Context, tsdb *tsdb.DB, lbls labels.Labels, value float64, ts int64) error {
 	var err error
 	appender := tsdb.Appender(ctx)
 
-	// Round up the time so that all appends happen with the same TS and
-	// avoid out of order samples errors.
-	ts := timestamp.FromTime(time.Now().Round(5 * time.Second))
+	// Set ts to now if nil.
+	if ts == 0 {
+		// Round up the time so that all appends happen with the same TS and
+		// avoid out of order samples errors.
+		ts = timestamp.FromTime(time.Now().Round(5 * time.Second))
+	}
 
 	defer func() { // An appender always needs to be committed or rolled back.
 		if err != nil {
@@ -77,6 +80,7 @@ func Add(ctx context.Context, logger log.Logger, tsdb *tsdb.DB, lbls labels.Labe
 			err = errors.Wrap(err, "db append commit failed")
 		}
 	}()
+	sort.Sort(lbls) // This is important! The labels need to be sorted to avoid creating the same series with duplicate reference.
 
 	_, err = appender.Append(0, lbls, ts, float64(value))
 	if err != nil {

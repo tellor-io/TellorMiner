@@ -13,7 +13,6 @@ require (
 	github.com/ethereum/go-ethereum v1.10.3
 	github.com/fatih/structtag v1.2.0
 	github.com/go-kit/kit v0.10.0
-	github.com/go-kit/log v0.1.0
 	github.com/google/go-github/v35 v35.3.1-0.20210613000602-77dd0eb64ad2
 	github.com/itchyny/gojq v0.12.4
 	github.com/joho/godotenv v1.3.0

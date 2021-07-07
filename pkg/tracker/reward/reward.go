@@ -242,7 +242,7 @@ func (self *RewardTracker) addGasEstimation(slot *big.Int, gasEstimation uint64)
 		labels.Label{Name: "__name__", Value: "gas_usage_estimated"},
 		labels.Label{Name: "slot", Value: slot.String()},
 	}
-	if err := db.Add(self.ctx, self.logger, self.tsDB, lbls, float64(gasEstimation)); err != nil {
+	if err := db.Add(self.ctx, self.tsDB, lbls, float64(gasEstimation), 0); err != nil {
 		return errors.Wrap(err, "adding gasEstimation value to the db")
 	}
 	return nil
@@ -253,7 +253,7 @@ func (self *RewardTracker) addGasUsed(slot string, gasUsed uint64) error {
 		labels.Label{Name: "__name__", Value: "gas_usage_actual"},
 		labels.Label{Name: "slot", Value: slot},
 	}
-	if err := db.Add(self.ctx, self.logger, self.tsDB, lbls, float64(gasUsed)); err != nil {
+	if err := db.Add(self.ctx, self.tsDB, lbls, float64(gasUsed), 0); err != nil {
 		return errors.Wrap(err, "adding gasUsed value to the db")
 	}
 	return nil

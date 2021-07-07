@@ -144,8 +144,7 @@ func (self mineCmd) Run() error {
 			}
 			netID := _netID.Int64()
 
-			// Dispute tracker.
-			// Run it only when not connected to a remote DB.
+			// Run some component only when not connected to a remote DB.
 			// A remote DB already runs a dispute tracker so no need to run another one.
 			// Also run and only for mainnet or rinkeby as the tellor oracle exists only on those networks.
 			if netID == 1 || netID == 4 {
@@ -243,12 +242,8 @@ func (self mineCmd) Run() error {
 
 				psr := psrTellor.New(loggerWithAddr, cfg.PsrTellor, aggregator)
 
-				_tsDB, ok := tsDB.(*tsdb.DB)
-				if !ok {
-					return errors.New("tsdb is not a writable DB instance")
-				}
 				// Reward tracker instance for the query.
-				rewardQuerier, err := reward.NewRewardQuerier(logger, ctx, cfg.RewardTracker, _tsDB, client, contractTellor, accounts[0].Address, aggregator)
+				rewardQuerier, err := reward.NewRewardQuerier(logger, ctx, cfg.RewardTracker, tsDB, client, contractTellor, accounts[0].Address, aggregator)
 				if err != nil {
 					return errors.Wrap(err, "creating reward tracker")
 				}
