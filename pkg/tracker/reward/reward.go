@@ -70,11 +70,6 @@ func NewRewardTracker(
 	}
 	logger = log.With(logger, "component", ComponentName)
 
-	abi, err := abi.JSON(strings.NewReader(tellor.TellorABI))
-	if err != nil {
-		return nil, errors.Wrap(err, "abi read")
-	}
-
 	opts := promql.EngineOpts{
 		Logger:               logger,
 		Reg:                  nil,
@@ -91,7 +86,6 @@ func NewRewardTracker(
 		client:           client,
 		logger:           logger,
 		contractInstance: contractInstance,
-		abi:              abi,
 		addr:             addr,
 		ctx:              ctx,
 		stop:             cncl,
@@ -238,10 +232,10 @@ func (self *RewardTracker) recordGasUsageEstimated() error {
 
 func (self *RewardTracker) addGasEstimation(slot *big.Int, gasEstimation uint64) error {
 	lbls := labels.Labels{
-		labels.Label{Name: "__name__", Value: "gas_usage_estimated"},
+		labels.Label{Name: "__name__", Value: "gas_usage_estimation"},
 		labels.Label{Name: "slot", Value: slot.String()},
 	}
-	if err := db.Add(self.ctx, self.tsDB, lbls, float64(gasEstimation), 0); err != nil {
+	if err := db.Add(self.ctx, self.tsDB, lbls, float64(gasEstimation)); err != nil {
 		return errors.Wrap(err, "adding gasEstimation value to the db")
 	}
 	return nil
@@ -252,7 +246,7 @@ func (self *RewardTracker) addGasUsed(slot string, gasUsed uint64) error {
 		labels.Label{Name: "__name__", Value: "gas_usage_actual"},
 		labels.Label{Name: "slot", Value: slot},
 	}
-	if err := db.Add(self.ctx, self.tsDB, lbls, float64(gasUsed), 0); err != nil {
+	if err := db.Add(self.ctx, self.tsDB, lbls, float64(gasUsed)); err != nil {
 		return errors.Wrap(err, "adding gasUsed value to the db")
 	}
 	return nil
@@ -305,7 +299,7 @@ func (self *RewardTracker) Current(ctx context.Context, slot *big.Int, gasPriceE
 func (self *RewardTracker) GasUsed(ctx context.Context, slot *big.Int) (*big.Int, error) {
 	query, err := self.engine.NewInstantQuery(
 		self.tsDB,
-		`last_over_time(gas_usage_estimated{slot="`+slot.String()+`"}[1d]) - `+`last_over_time(gas_usage_actual{slot="`+slot.String()+`"}[1d])`,
+		`last_over_time(gas_usage_estimation{slot="`+slot.String()+`"}[1d]) - `+`last_over_time(gas_usage_actual{slot="`+slot.String()+`"}[1d])`,
 		time.Now(),
 	)
 	if err != nil {

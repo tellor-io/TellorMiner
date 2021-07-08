@@ -23,7 +23,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/prometheus/pkg/labels"
-	"github.com/prometheus/prometheus/pkg/timestamp"
 	"github.com/prometheus/prometheus/tsdb"
 	"github.com/tellor-io/telliot/pkg/db"
 	"github.com/tellor-io/telliot/pkg/ethereum"
@@ -217,15 +216,13 @@ func (self *IndexTracker) record(delay time.Duration, symbol string, interval ti
 	logger := log.With(self.logger, "source", dataSource.Source())
 
 	for {
-		ts := timestamp.FromTime(time.Now())
-
 		// Record the source interval to use it for the confidence calculation.
 		// Confidence = avg(actualSamplesCount/expectedMaxSamplesCount) for a given period.
-		if err := self.recordInterval(ts, interval, symbol, dataSource); err != nil {
+		if err := self.recordInterval(interval, symbol, dataSource); err != nil {
 			level.Error(logger).Log("msg", "record interval to the DB", "err", err)
 		}
 
-		if err := self.recordValue(logger, ts, interval, symbol, dataSource); err != nil {
+		if err := self.recordValue(logger, interval, symbol, dataSource); err != nil {
 			level.Error(logger).Log("msg", "record value to the DB", "err", err)
 		}
 
@@ -239,7 +236,7 @@ func (self *IndexTracker) record(delay time.Duration, symbol string, interval ti
 	}
 }
 
-func (self *IndexTracker) recordInterval(ts int64, interval time.Duration, symbol string, dataSource DataSource) (err error) {
+func (self *IndexTracker) recordInterval(interval time.Duration, symbol string, dataSource DataSource) (err error) {
 	source, err := url.Parse(dataSource.Source())
 	if err != nil {
 		return errors.Wrap(err, "parsing url from data source")
@@ -254,10 +251,10 @@ func (self *IndexTracker) recordInterval(ts int64, interval time.Duration, symbo
 
 	sort.Sort(lbls) // This is important! The labels need to be sorted to avoid creating the same series with duplicate reference.
 
-	return db.Add(self.ctx, self.tsDB, lbls, float64(interval), ts)
+	return db.Add(self.ctx, self.tsDB, lbls, float64(interval))
 }
 
-func (self *IndexTracker) recordValue(logger log.Logger, ts int64, interval time.Duration, symbol string, dataSource DataSource) (err error) {
+func (self *IndexTracker) recordValue(logger log.Logger, interval time.Duration, symbol string, dataSource DataSource) (err error) {
 	value, err := dataSource.Get(self.ctx)
 	if err != nil {
 		self.getErrors.With(
@@ -280,7 +277,7 @@ func (self *IndexTracker) recordValue(logger log.Logger, ts int64, interval time
 		labels.Label{Name: "symbol", Value: format.SanitizeMetricName(symbol)},
 	}
 
-	err = db.Add(self.ctx, self.tsDB, lbls, value, ts)
+	err = db.Add(self.ctx, self.tsDB, lbls, value)
 	if err != nil {
 		return errors.Wrap(err, "append values to the DB")
 	}

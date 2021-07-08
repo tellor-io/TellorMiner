@@ -64,7 +64,7 @@ func Add(ctx context.Context, tsdb *tsdb.DB, lbls labels.Labels, value float64) 
 
 	// Round up the time so that all appends happen with the same TS and
 	// avoid out of order samples errors.
-	ts = timestamp.FromTime(time.Now().Round(5 * time.Second))
+	ts := timestamp.FromTime(time.Now().Round(5 * time.Second))
 
 	defer func() { // An appender always needs to be committed or rolled back.
 		if err != nil {
