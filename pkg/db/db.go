@@ -58,16 +58,13 @@ func NewRemoteDB(cfg Config) (storage.SampleAndChunkQueryable, error) {
 	), nil
 }
 
-func Add(ctx context.Context, tsdb *tsdb.DB, lbls labels.Labels, value float64, ts int64) error {
+func Add(ctx context.Context, tsdb *tsdb.DB, lbls labels.Labels, value float64) error {
 	var err error
 	appender := tsdb.Appender(ctx)
 
-	// Set ts to now if nil.
-	if ts == 0 {
-		// Round up the time so that all appends happen with the same TS and
-		// avoid out of order samples errors.
-		ts = timestamp.FromTime(time.Now().Round(5 * time.Second))
-	}
+	// Round up the time so that all appends happen with the same TS and
+	// avoid out of order samples errors.
+	ts = timestamp.FromTime(time.Now().Round(5 * time.Second))
 
 	defer func() { // An appender always needs to be committed or rolled back.
 		if err != nil {
