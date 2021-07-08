@@ -45,7 +45,6 @@ type RewardTracker struct {
 	client           *ethclient.Client
 	logger           log.Logger
 	contractInstance *contracts.ITellor
-	abi              abi.ABI
 	ctx              context.Context
 	stop             context.CancelFunc
 	addr             common.Address
