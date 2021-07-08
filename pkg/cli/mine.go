@@ -242,7 +242,6 @@ func (self mineCmd) Run() error {
 
 				psr := psrTellor.New(loggerWithAddr, cfg.PsrTellor, aggregator)
 
-				// Reward tracker instance for the query.
 				rewardQuerier, err := reward.NewRewardQuerier(logger, ctx, cfg.RewardTracker, tsDB, client, contractTellor, accounts[0].Address, aggregator)
 				if err != nil {
 					return errors.Wrap(err, "creating reward tracker")
