@@ -1,0 +1,9 @@
+{{- if .Values.prometheus.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ template "prometheus.fullname" . }}-rules
+data:
+  telliot.yaml: |-
+{{ .Files.Get "files/telliot.yaml" | indent 4 }}
+{{- end }}

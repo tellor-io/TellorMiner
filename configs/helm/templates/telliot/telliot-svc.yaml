@@ -1,0 +1,18 @@
+{{- range $index := .Values.telliot.modes }}
+{{- $val := dict "mode" $index }}
+{{- $modeName := printf "%s-%s" (include "telliot.fullname" $) (include "telliot.modeName" $val) | trunc 63 | trimSuffix "-" }}
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: {{ $modeName }}
+  labels:
+    app: {{ $modeName }}
+spec:
+  selector:
+    app: {{ $modeName }}
+  ports:
+  - name: {{ $modeName }}
+    port: {{ $.Values.telliot.service.port }}
+    targetPort: {{ $.Values.telliot.container.port }}
+{{- end }}

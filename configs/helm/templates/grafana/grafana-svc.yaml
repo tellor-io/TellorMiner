@@ -1,0 +1,15 @@
+{{- if .Values.grafana.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ template "grafana.fullname" . }}
+spec:
+  type: LoadBalancer
+  selector:
+    app: {{ template "grafana.fullname" . }}
+  ports:
+  - protocol: TCP
+    port: {{ .Values.grafana.service.port }}
+    targetPort: {{ .Values.grafana.container.port }}
+    name: http
+{{- end }}

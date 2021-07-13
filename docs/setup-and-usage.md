@@ -109,112 +109,141 @@ cp configs/.env.example configs/.env # Edit the file after the copy.
 docker run -v $(pwd)/configs:/configs tellor/telliot:master mine
 ```
 
-## Run cli in mining mode with k8s
+## Run on Kubernetes with Helm Chart
 
-{% hint style="info" %}
-tested with [google cloud](https://cloud.google.com), but should work with any k8s cluster.
-{% endhint %}
+A Helm chart for installing telliot on Kubernetes
 
-* Install [`gcloud`](https://cloud.google.com/sdk/docs/install)
-* Install [`kubectl`](https://kubernetes.io/docs/tasks/tools/install-kubectl)
-* Create a k8s cluster with a single node
-* Login to the cluster
+[A guide for installing helm can be found here](https://helm.sh/docs/intro/install/)
+
+## telliot Configuration
+
+Include telliot configuration files in the files directory of this chart.
+
+These files should be:
+
+- .env
+- index.json
+- manualData.json
+
+Run the following to use the default configuration files:
 
 ```bash
-gcloud auth login --project projectName
-gcloud container clusters get-credentials main --zone europe-west2-a --project projectName
+cp configs/index.json configs/manualData.json configs/helm/files/
+cp configs/.env.example configs/helm/files/.env # you will need to edit this file with your own secrets after copying
 ```
 
-* Deploy the `cli` \(by default deployed to run as a miner\)
+Optionally you can also include config.json if you would like to override any default config values.
+
+## Usage
+
+After you have moved your configuration files to config/helm/files, you can install this chart using the following command:
 
 ```bash
-git clone https://github.com/tellor-io/telliot
-cd telliot
-export INSTANCE_NAME=lat # Use max 3 characters due to k8s limitation for port names.
-export DEPL_NAME=telliot-m # This is the name of the deployment file.
-export CFG_FOLDER=.local/configs/$DEPL_NAME-$INSTANCE_NAME # Configs will be copied to this folder.
-export DEPL_INSTANCE_NAME=$DEPL_NAME-$INSTANCE_NAME
-mkdir -p $CFG_FOLDER
-
-# Create the secret file.
-cp configs/.env.example $CFG_FOLDER/.env # Edit the file after the copy.
-
-touch $CFG_FOLDER/config.json # Create an empty file and if needed overwrite the defaults.
-
-# Copy the manual data file.
-cp configs/manualData.json $CFG_FOLDER/manualData.json
-
-# Apply the configs.
-kubectl create secret generic $DEPL_INSTANCE_NAME --from-env-file=$CFG_FOLDER/.env
-kubectl create configmap $DEPL_INSTANCE_NAME \
-  --from-file=configs/index.json \
-  --from-file=$CFG_FOLDER/config.json \
-  --from-file=$CFG_FOLDER/manualData.json \
-  -o yaml --dry-run=client | kubectl apply -f -
-
-# Copy the manifest and run it.
-cp configs/manifests/$DEPL_NAME.yml $CFG_FOLDER/$DEPL_NAME.yml
-sed -i "s/$DEPL_NAME/$DEPL_INSTANCE_NAME/g" $CFG_FOLDER/$DEPL_NAME.yml
-kubectl apply -f $CFG_FOLDER/$DEPL_NAME.yml
+export INSTANCE_NAME=lat
+helm install $INSTANCE_NAME configs/helm/ \
+    --namespace tellor --create-namespace 
 ```
 
-### Run the cli in dataserver mode.
+INSTANCE_NAME being a string you would use to denote this instance of telliot.
+
+Keep in mind this command is using all default values.
+
+## Values
+
+The default helm values will install a mining and dataServer instance of telliot. Grafana, Alertmanager, and Prometheus are disabled by default.
+
+To override these values during installation include `--set $key=$value` in the helm upgrade command.
+
+For example, to run a dataserver instance of telliot using a custom image with 5Gi of storage and the monitoring/alerting stack:
 
 ```bash
-export INSTANCE_NAME=lat # Use max 3 characters due to k8s limitation for port names.
-export CFG_FOLDER=.local/configs/db
-export DEPL_NAME=telliot-db
-mkdir -p $CFG_FOLDER
-
-# Run the same commands as the mining deployment.
-
-See [configuration page](configuration.md) on how to setup other instances to connect to this remote dataserver
-
-### To run another instance.
-
-```bash
-export NAME= # Put an instance name here. Something short as some properties are limited by length(e.g `export NAME=PR1`).
-# Run all the other commands from initial k8s setup.
+export INSTANCE_NAME=lat
+helm install $INSTANCE_NAME configs/helm/ \
+    --namespace tellor --create-namespace \
+    --set "telliot.container.image=mytelliot:01" \
+    --set "telliot.storage=5Gi" \
+    --set "telliot.modes={dataServer}" \
+    --set "grafana.enabled=true" \
+    --set "alertmanager.enabled=true"
+    --set "prometheus.enabled=true"
 ```
 
-### To delete an instance.
+If I instead only wanted to run a mining instance of telliot:
 
 ```bash
-kubectl delete statefulsets.apps $DEPL_INSTANCE_NAME
-kubectl delete service $DEPL_INSTANCE_NAME
-kubectl delete configmap $DEPL_INSTANCE_NAME
-kubectl delete secret $DEPL_INSTANCE_NAME
-kubectl delete persistentvolumeclaims $DEPL_INSTANCE_NAME
+export INSTANCE_NAME=lat
+helm install $INSTANCE_NAME configs/helm/ \
+    --namespace tellor --create-namespace \
+    --set "telliot.modes={mine}" \
 ```
 
-### To run a custom docker image.
+You can also modify these values directly in values.yaml before installation.
+
+| Key                              | Type   | Default                               | Description                                                                                  |
+| -------------------------------- | ------ | ------------------------------------- | -------------------------------------------------------------------------------------------- |
+| alertmanager.bot.container.image | string | `"metalmatze/alertmanager-bot:0.4.3"` | Docker image for alertmanager bot                                                            |
+| alertmanager.bot.container.port  | int    | `8080`                                |                                                                                              |
+| alertmanager.bot.enabled         | bool   | `false`                               | Whether to enable alertmanager bot                                                           |
+| alertmanager.bot.service.port    | int    | `8080`                                |                                                                                              |
+| alertmanager.bot.storage         | string | `"1Gi"`                               |                                                                                              |
+| alertmanager.bot.telegram.admin  | string | `nil`                                 | Telegram admin username                                                                      |
+| alertmanager.bot.telegram.token  | string | `nil`                                 | Telegram token                                                                               |
+| alertmanager.container.image     | string | `"prom/alertmanager:v0.19.0"`         | Docker image for alertmanager                                                                |
+| alertmanager.container.port      | int    | `9093`                                |                                                                                              |
+| alertmanager.enabled             | bool   | `false`                               |                                                                                              |
+| alertmanager.service.port        | int    | `9093`                                |                                                                                              |
+| grafana.container.image          | string | `"grafana/grafana:7.3.6"`             | Docker image for grafana                                                                     |
+| grafana.container.port           | int    | `3000`                                |                                                                                              |
+| grafana.enabled                  | bool   | `false`                               |                                                                                              |
+| grafana.ingress.class            | string | `"nginx"`                             | Ingress class to use for grafana                                                             |
+| grafana.ingress.hostname         | string | `"monitor.tellor.io"`                 | Hostname to use for accessing grafana                                                        |
+| grafana.ingress.path             | string | `"/"`                                 | Subpath to access grafana                                                                    |
+| grafana.ingress.tls.enabled      | bool   | `false`                               | Enable/Disable TLS for grafana                                                               |
+| grafana.ingress.tls.secret       | string | `"grafana-tls-secret"`                | Name of TLS secret to use for grafana                                                        |
+| grafana.persist                  | bool   | `true`                                | Enable persistance for grafana configuration                                                 |
+| grafana.service.port             | int    | `80`                                  |                                                                                              |
+| grafana.storage                  | string | `"5Gi"`                               | Grafana persistent storage size                                                              |
+| prometheus.container.image       | string | `"prom/prometheus:v2.24.0"`           | Docker image for prometheus                                                                  |
+| prometheus.container.port        | int    | `9090`                                |                                                                                              |
+| prometheus.enabled               | bool   | `false`                               |                                                                                              |
+| prometheus.persist               | bool   | `true`                                | Enable persistance for prometheus configuration                                              |
+| prometheus.service.port          | int    | `9090`                                |                                                                                              |
+| prometheus.storage               | int    | `50`                                  | Prometheus storage size in GB                                                                |
+| telliot.uniqueConfiguration      | bool   | `false`                               | Whether to utilize unique configurations for dataServer and mine. <sup>[1](#footnote1)</sup> |
+| telliot.container.image          | string | `"tellor/telliot:master"`             | Docker image for telliot                                                                     |
+| telliot.container.port           | int    | `9090`                                |                                                                                              |
+| telliot.modes                    | string | `"{dataServer,mine}"`                 | Array of commands to spawn separate instances of telliot instances with                      |
+| telliot.service.port             | int    | `9090`                                |                                                                                              |
+| telliot.storage                  | string | `"2Gi"`                               | telliot persistent storage size                                                              |
+
+<a name="footnote1">1</a>: If this value is set to true, you will need to provide configurations for both modes under config/helm/files/mine and config/helm/files/dataServer.
+
+## Upgrade
+
+To upgrade your instance simply run
 
 ```bash
-export REPO= # Your docker repository name.
-docker build . -t $REPO/telliot:custom
-docker push $REPO/telliot:latest
-
-sed -i "s/tellor\/telliot:latest/$REPO\/telliot:custom/g" $CFG_FOLDER/telliot-m.yml
-kubectl apply -f $CFG_FOLDER/telliot-m.yml
+helm upgrade $INSTANCE_NAME configs/helm/ --namespace tellor --set $key=$value
 ```
 
-### Optionally deploy the monitoring stack with Prometheus and Grafana.
+With `$key=$value` being the desired value changes you would like to make.
+
+If you would like to make any config changes, move the updated configuration file to configs/helm/files/ and run
 
 ```bash
-kubectl apply -f configs/manifests/monitoring-persist.yml
-kubectl apply -f configs/manifests/monitoring.yml
+helm upgrade $INSTANCE_NAME configs/helm/ --namespace tellor
 ```
 
-###  Optionally deploy the alerting manager and get alerts on your Telegram bot.
+## Removal
 
-This uses the alertmanager bot. see [here](https://github.com/metalmatze/alertmanager-bot) for more info and available commands.
+Uninstalling an instance of telliot using helm is as simple as
 
 ```bash
-# Create a secret for the telegram authentication.
-kubectl create secret generic alertmanager-bot \
-  --from-literal=admin='<telegram admin>' \
-  --from-literal=token='<telegram token>'
-kubectl apply -f configs/manifests/alerting-persist.yml
-kubectl apply -f configs/manifests/alerting.yml
+helm uninstall $INSTANCE_NAME --namespace tellor
 ```
 
+Where instance name was the name for the release you specified during installation. You can find this value by running
+
+```bash
+helm list --namespace tellor
+```

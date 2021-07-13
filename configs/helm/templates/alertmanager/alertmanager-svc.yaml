@@ -1,0 +1,14 @@
+{{- if .Values.alertmanager.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ template "alertmanager.fullname" . }}
+spec:
+  selector: 
+    app: {{ template "alertmanager.fullname" . }}
+  type: NodePort  
+  ports:
+    - port: {{ .Values.alertmanager.service.port }}
+      targetPort: {{ .Values.alertmanager.container.port }}
+      nodePort: 31000
+{{- end }}

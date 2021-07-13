@@ -1,0 +1,60 @@
+telliot:
+  container:
+    image: tellor/telliot:master
+    port: 9090
+  service:
+    port: 9090
+  modes: # Add mine, dataServer or both to this array
+    - mine
+  uniqueConfiguration: false
+  storage: 2Gi
+  storageClassName: microk8s-hostpath
+
+grafana:
+  enabled: false
+  persist: true
+  serveFromSubPath: false
+  rootUrl: http://grafana.node1.local/
+  service:
+    port: 80
+  ingress:
+    class: nginx
+    hostname: monitor.tellor.io
+    path: /
+    tls:
+      enabled: false
+      secret: grafana-tls-secret
+  container:
+    port: 3000
+    image: grafana/grafana:7.3.6
+  storage: 5Gi
+
+alertmanager:
+  enabled: false
+  container:
+    image: prom/alertmanager:v0.19.0
+    port: 9093
+  service:
+    port: 9093
+  bot:
+    enabled: false
+    service:
+      port: 8080
+    container:
+      image: metalmatze/alertmanager-bot:0.4.3
+      port: 8080
+    storage: 1Gi
+    telegram:
+      token: Null
+      admin: Null
+
+prometheus:
+  enabled: false
+  persist: true
+  service:
+    port: 9090
+  container:
+    port: 9090
+    image: prom/prometheus:v2.24.0
+  storage: 50 # In gigabytes, do not add units (gb,mb,kb,etc..) to this value
+  storageClassName: microk8s-hostpath

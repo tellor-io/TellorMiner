@@ -1,0 +1,53 @@
+{{- if .Values.alertmanager.enabled }}
+{{- if .Values.alertmanager.bot.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  labels:
+    app: {{ template "alertmanager.fullname" . }}-bot
+  name: {{ template "alertmanager.fullname" . }}-bot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ template "alertmanager.fullname" . }}-bot
+  serviceName: {{ template "alertmanager.fullname" . }}-bot
+  template:
+    metadata:
+      labels:
+        app: {{ template "alertmanager.fullname" . }}-bot
+      name: {{ template "alertmanager.fullname" . }}-bot
+    spec:
+      containers:
+      - args:
+        - --alertmanager.url=http://{{ template "alertmanager.fullname" . }}:{{ .Values.alertmanager.container.port }}
+        - --log.level=info
+        - --store=bolt
+        - --bolt.path=/data/bot.db
+        env:
+        - name: TELEGRAM_ADMIN
+          valueFrom:
+            secretKeyRef:
+              key: admin
+              name: {{ template "alertmanager.fullname" . }}-bot
+        - name: TELEGRAM_TOKEN
+          valueFrom:
+            secretKeyRef:
+              key: token
+              name: {{ template "alertmanager.fullname" . }}-bot
+        image: {{ .Values.alertmanager.bot.container.image }}
+        imagePullPolicy: IfNotPresent
+        name: {{ template "alertmanager.fullname" . }}-bot
+        ports:
+        - containerPort: {{ .Values.alertmanager.bot.container.port }}
+          name: http
+        volumeMounts:
+        - mountPath: /data
+          name: {{ template "alertmanager.fullname" . }}-bot
+      restartPolicy: Always
+      volumes:
+      - name: {{ template "alertmanager.fullname" . }}-bot
+        persistentVolumeClaim:
+          claimName: {{ template "alertmanager.fullname" . }}-bot
+{{- end }}
+{{- end }}

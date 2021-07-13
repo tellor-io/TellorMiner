@@ -8,3 +8,5 @@ myconfig.json
 tmp
 db
 scripts/bindings
+
+configs/helm/files/*

@@ -1,0 +1,53 @@
+{{- if .Values.prometheus.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ template "prometheus.fullname" . }}
+  labels:
+    app: {{ template "prometheus.fullname" . }}
+spec:
+  serviceName: {{ template "prometheus.fullname" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ template "prometheus.fullname" . }}
+  template:
+    metadata:
+      labels:
+        app: {{ template "prometheus.fullname" . }}
+    spec:
+      serviceAccountName: {{ template "prometheus.fullname" . }}
+      securityContext:
+        runAsUser: 0
+      containers:
+      - image: {{ .Values.prometheus.container.image }}
+        args:
+        - "--config.file=/etc/prometheus/config/prometheus.yaml"
+        - "--storage.tsdb.path=/data"
+        - "--storage.tsdb.retention.size={{ sub .Values.prometheus.storage 10 }}GB" 
+        - "--web.enable-lifecycle" 
+        - "--web.enable-admin-api"
+        name: {{ template "prometheus.fullname" . }}
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/prometheus/config
+        - name: prometheus-telliot-rules
+          mountPath: /etc/prometheus/alerts
+        - name: storage
+          mountPath: /data
+          subPath: prometheus-data
+        ports:
+        - name: {{ template "prometheus.fullname" . }}
+          containerPort: {{ .Values.prometheus.container.port }}
+      volumes:
+      - name: config-volume
+        configMap:
+          name: {{ template "prometheus.fullname" . }}-config
+      - name: prometheus-telliot-rules
+        configMap:
+          name: {{ template "prometheus.fullname" . }}-rules
+      - name: storage
+        persistentVolumeClaim:
+          claimName: {{ template "prometheus.fullname" . }}
+      terminationGracePeriodSeconds: 300
+{{- end }}

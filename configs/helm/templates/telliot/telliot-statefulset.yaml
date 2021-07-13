@@ -1,0 +1,59 @@
+{{- range $index := .Values.telliot.modes }}
+{{- $val := dict "mode" $index }}
+{{- $modeName := printf "%s-%s" (include "telliot.fullname" $) (include "telliot.modeName" $val) | trunc 63 | trimSuffix "-" }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $modeName }}
+  labels:
+    app: {{ $modeName }}
+spec:
+  serviceName: {{ $modeName }}
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ $modeName }}
+  template:
+    metadata:
+      labels:
+        app: {{ $modeName }}
+    spec:
+      containers:
+      - name: {{ $modeName }}
+        image: {{ $.Values.telliot.container.image }}
+        imagePullPolicy: Always
+        args: ["{{ $index | lower }}"]
+        ports:
+        - name: {{ $modeName }}
+          containerPort: 9090
+        volumeMounts:
+        - name: config
+          mountPath: "/configs"
+        - name: db
+          mountPath: "/db"
+        env:
+        {{- if $.Values.telliot.uniqueConfiguration }}
+        {{- $path := printf "%s/%s" "files" ($modeName | lower) }}
+        {{- else }}
+        {{- $path := "files" }}
+        {{- $file := $.Files.Get (printf "%s/%s" $path ".env") | trimSuffix "\n" }}
+        {{- range $line := splitList "\n" $file }}
+        {{- if and (contains "=" $line) (not (hasPrefix "#" $line)) }}
+        {{- $kv := splitList "=" $line }}
+        - name: {{ first $kv }}
+          valueFrom:
+            secretKeyRef:
+              name: {{ $modeName }}
+              key: {{ first $kv }}
+        {{- end }}
+        {{- end }}
+        {{- end }}
+      volumes:
+      - name: config
+        configMap:
+          name: {{ $modeName }}
+      - name: db
+        persistentVolumeClaim:
+          claimName: {{ $modeName }}
+{{- end }}

@@ -1,0 +1,15 @@
+{{- if .Values.prometheus.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ template "prometheus.fullname" . }}
+  labels:
+    app: {{ template "prometheus.fullname" . }}
+spec:
+  ports:
+  - name: {{ template "prometheus.fullname" . }}
+    port: {{ .Values.prometheus.service.port }}
+    targetPort: {{ .Values.prometheus.container.port }}
+  selector:
+    app: {{ template "prometheus.fullname" . }}
+{{- end }}

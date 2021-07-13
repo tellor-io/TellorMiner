@@ -1,0 +1,50 @@
+{{- if .Values.grafana.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ template "grafana.fullname" . }}
+  labels:
+    app: {{ template "grafana.fullname" . }}
+spec:
+  serviceName: {{ template "grafana.fullname" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+        app: {{ template "grafana.fullname" . }}
+  template:
+    metadata:
+      labels:
+        app: {{ template "grafana.fullname" . }}
+    spec:
+      securityContext:
+        runAsUser: 472
+        fsGroup: 472
+      containers:
+      - image: {{ .Values.grafana.container.image }}
+        name: {{ template "grafana.fullname" . }}
+        imagePullPolicy: IfNotPresent
+        env:
+          - name: GF_AUTH_ANONYMOUS_ENABLED
+            value: "true"
+          - name: GF_AUTH_ANONYMOUS_ORG_NAME
+            value: "Main Org." # Don't change or it will disable anonymous access.
+          - name: GF_USERS_VIEWERS_CAN_EDIT
+            value: "false"
+        volumeMounts:
+        - name: {{ template "grafana.fullname" . }}
+          mountPath: /var/lib/grafana
+        - name: {{ template "grafana.fullname" . }}-datasource-provision
+          mountPath: /etc/grafana/provisioning/datasources
+        ports:
+        - name: http
+          containerPort: {{ .Values.grafana.container.port }}
+      volumes:
+      {{- if .Values.grafana.persist }}
+      - name: {{ template "grafana.fullname" . }}
+        persistentVolumeClaim:
+          claimName: {{ template "grafana.fullname" . }}
+      {{- end }}
+      - name: {{ template "grafana.fullname" . }}-datasource-provision
+        configMap:
+          name: {{ template "grafana.fullname" . }}-datasource-provision
+{{- end }}

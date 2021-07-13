@@ -1,0 +1,24 @@
+{{- range $index := .Values.telliot.modes }}
+{{- $val := dict "mode" $index }}
+{{- $modeName := printf "%s-%s" (include "telliot.fullname" $) (include "telliot.modeName" $val) | trunc 63 | trimSuffix "-" }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $modeName }}
+data:
+{{- if $.Values.telliot.uniqueConfiguration }}
+{{- $path := printf "%s/%s" "files" ($modeName | lower) }}
+{{- else }}
+{{- $path := "files" }}
+{{- $globdata := $.Files.Glob (printf "%s/%s" $path "config.json") }}
+{{- if $globdata }}
+  config.json: |-
+{{ $.Files.Get (printf "%s/%s" $path "config.json") | indent 4 }}
+{{- end }}
+  index.json: |-
+{{ $.Files.Get (printf "%s/%s" $path "index.json") | indent 4 }}
+  manualData.json: |-
+{{ $.Files.Get (printf "%s/%s" $path "manualData.json") | indent 4 }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,16 @@
+{{- range $index := .Values.telliot.modes }}
+{{- $val := dict "mode" $index }}
+{{- $modeName := printf "%s-%s" (include "telliot.fullname" $) (include "telliot.modeName" $val) | trunc 63 | trimSuffix "-" }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $modeName }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ $.Values.telliot.storage }}
+      # storageClassName: {{ $.Values.telliot.storageClassName }}
+{{- end }}

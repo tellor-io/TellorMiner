@@ -1,0 +1,15 @@
+{{- if .Values.grafana.enabled }}
+{{- if .Values.grafana.persist }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ template "grafana.fullname" . }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  # storageClassName: {{ .Values.grafana.storageClassName }}
+  resources:
+    requests:
+      storage: {{ .Values.grafana.storage }}
+{{- end }}
+{{- end }}

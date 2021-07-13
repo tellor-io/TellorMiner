@@ -1,0 +1,29 @@
+{{- if .Values.grafana.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ template "grafana.fullname" . }}-datasource-provision
+data:
+  prometheus-datasource.yaml: |
+    apiVersion: 1
+    deleteDatasources:
+      - name: prometheus
+        orgId: 1
+    datasources:
+    - name: prometheus
+      type: prometheus
+      access: proxy
+      orgId: 1
+      url: http://{{ template "prometheus.fullname" . }}:{{ .Values.prometheus.service.port }}
+      isDefault: true
+      jsonData:
+         graphiteVersion: "1.1"
+         tlsAuth: false
+         tlsAuthWithCACert: false
+      secureJsonData:
+        tlsCACert: "..."
+        tlsClientCert: "..."
+        tlsClientKey: "..."
+      version: 1
+      editable: true
+{{- end }}

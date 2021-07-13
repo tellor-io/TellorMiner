@@ -1,0 +1,15 @@
+{{- if .Values.alertmanager.enabled }}
+{{- if .Values.alertmanager.bot.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ template "alertmanager.fullname" . }}-bot
+spec:
+  accessModes:
+    - ReadWriteOnce
+  # storageClassName: {{ .Values.alertmanager.bot.storageClassName }}
+  resources:
+    requests:
+      storage: {{ .Values.alertmanager.bot.storage }}
+{{- end }}
+{{- end }}
