@@ -25,7 +25,7 @@ import (
 	"github.com/tellor-io/telliot/pkg/logging"
 	"github.com/tellor-io/telliot/pkg/mining"
 	psr "github.com/tellor-io/telliot/pkg/psr/tellor"
-	"github.com/tellor-io/telliot/pkg/reward"
+	"github.com/tellor-io/telliot/pkg/tracker/reward"
 	"github.com/tellor-io/telliot/pkg/transactor"
 )
 
@@ -64,7 +64,7 @@ type Submitter struct {
 	submitValue     *prometheus.GaugeVec
 	lastSubmitCncl  context.CancelFunc
 	transactor      transactor.Transactor
-	reward          *reward.Reward
+	reward          *reward.RewardQuerier
 	gasPriceQuerier gasPrice.GasPriceQuerier
 	psr             *psr.Psr
 }
@@ -76,7 +76,7 @@ func New(
 	client *ethclient.Client,
 	contract ContractCaller,
 	account *ethereum.Account,
-	reward *reward.Reward,
+	reward *reward.RewardQuerier,
 	transactor transactor.Transactor,
 	gasPriceQuerier gasPrice.GasPriceQuerier,
 	psr *psr.Psr,
@@ -239,7 +239,9 @@ func (self *Submitter) profitPercent() (int64, error) {
 		slot.SetInt64(0)
 	}
 
-	return self.reward.Current(slot, gasPrice)
+	ctx, cncl := context.WithTimeout(self.ctx, 3*time.Second)
+	defer cncl()
+	return self.reward.Current(ctx, slot, gasPrice)
 }
 
 func (self *Submitter) Submit(newChallengeReplace context.Context, result *mining.Result) {
@@ -317,13 +319,6 @@ func (self *Submitter) Submit(newChallengeReplace context.Context, result *minin
 							"id": id.String(),
 						},
 					).(prometheus.Gauge).Set(float64(reqVals[i].Int64()))
-				}
-
-				slot, err := self.reward.Slot()
-				if err != nil {
-					level.Error(self.logger).Log("msg", "getting _SLOT_PROGRESS for saving gas used", "err", err)
-				} else {
-					self.reward.SaveGasUsed(slot, recieipt.GasUsed)
 				}
 
 				return

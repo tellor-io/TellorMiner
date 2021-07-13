@@ -21,6 +21,7 @@ import (
 	psrTellor "github.com/tellor-io/telliot/pkg/psr/tellor"
 	"github.com/tellor-io/telliot/pkg/tracker/dispute"
 	"github.com/tellor-io/telliot/pkg/tracker/index"
+	"github.com/tellor-io/telliot/pkg/tracker/reward"
 	"github.com/tellor-io/telliot/pkg/web"
 )
 
@@ -97,6 +98,23 @@ func (self dataserverCmd) Run() error {
 		if err != nil {
 			return errors.Wrap(err, "create tellor contract instance")
 		}
+
+		// Reward tracker.
+		accounts, err := ethereum.GetAccounts()
+		if err != nil {
+			return errors.Wrap(err, "getting accounts")
+		}
+		rewardTracker, err := reward.NewRewardTracker(logger, ctx, cfg.RewardTracker, tsDB, client, contractTellor, accounts[0].Address, aggregator)
+		if err != nil {
+			return errors.Wrap(err, "creating reward tracker")
+		}
+		g.Add(func() error {
+			err := rewardTracker.Start()
+			level.Info(logger).Log("msg", "reward tracker shutdown complete")
+			return err
+		}, func(error) {
+			rewardTracker.Stop()
+		})
 
 		disputeTracker, err := dispute.New(
 			logger,
